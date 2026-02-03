@@ -18,8 +18,8 @@ Goal: Implement value iteration to find optimal policy for reaching goal from an
 
 ###### Parameters ######
 # Grid parameters (pointy-top hex grid)
-grid_width = 5  # width of hex grid
-grid_height = 5  # height of hex grid
+grid_width = 20  # width of hex grid
+grid_height = 10  # height of hex grid
 hex_size = 1.0  # size of one side of hex cell
 hex_height = 2 * hex_size
 hex_width = np.sqrt(3) * hex_size
@@ -27,8 +27,8 @@ hex_width = np.sqrt(3) * hex_size
 # MDP parameters
 gamma = 0.9  # discount factor
 num_value_iterations = 100  # number of iterations for value iteration
-prob_veer_lr = 0.025  # probability of veering when moving forward
-prob_veer_straight = 0.05  # probability of failing to turn
+prob_veer_lr = 0 #0.025  # probability of veering when moving forward
+prob_veer_straight = 0 #0.05  # probability of failing to turn
 
 # Simulation parameters
 start_state = (1, 0.0, 0.0)  # (direction, x, y)
@@ -50,7 +50,7 @@ def build_states():
     return states
 
 def move(state, action):
-    '''Compute state after taking action'''
+    '''Compute state after taking action, assuming deterministic movement'''
     dir = state[0]
     pos = state[1:]
 
@@ -62,6 +62,10 @@ def move(state, action):
         new_dir = (dir + 1) % 6
     else:
         raise ValueError("Invalid action")
+    
+    # TODO: need to adjust for boundaries/obstacles: if desired movement isnt possible, then have predetermined alternative movement
+    # kinda doesn't matter what the alt movement is - ex. if trying to go straight but cant, check right and left. 
+    # If none of those are available, turn right or left and stay in place. Or something like that. 
     
     # directions: 0 to 5, starting from right and going counter-clockwise
     if new_dir == 0:
@@ -87,7 +91,7 @@ def get_neighbors(state, states):
         new_state = move(state, action)
         if new_state in states:
             neighbors.append(new_state)
-        # TODO: need to account for when there are no valid moves (e.g., hitting wall)
+        # TODO: need to account for when there are no valid moves (e.g., hitting wall), see "move" function comment
     return neighbors
 
 
@@ -101,6 +105,8 @@ def transition(state, action, new_state):
     right = move(state, 2)
     rot_left = state[0] - 1 % 6
     rot_right = state[0] + 1 % 6
+    # if we change the "move" function so that it automatically handles walls/obstacles, then we dont need to check for those cases here - 
+    # they will just be part of the possible new_states returned by "move" and the probabiities should stay the same
 
     if action == 0:  # move forward
         if new_state == straight:
@@ -181,6 +187,8 @@ def simulate(states, start_state, policy, steps):
         idx = np.random.choice(len(next_states), p=probs)
         state = next_states[idx]
         trajectory.append(state)
+        if state[1:] == goal_position:
+            break  # stop if goal is reached
 
     return trajectory
 
