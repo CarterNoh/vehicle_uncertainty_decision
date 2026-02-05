@@ -67,8 +67,6 @@ def build_states():
 def move(state, action):
     '''Compute state after taking action'''
     dir, gx, gy = state
-    # dir = state[0]
-    # pos = state[1:]
 
     if action == 0: # move forward
         new_dir = dir
@@ -204,6 +202,8 @@ def simulate(states, start_state, policy, steps):
         idx = np.random.choice(len(next_states), p=probs)
         state = next_states[idx]
         trajectory.append(state)
+        if state[1:] == goal_position:
+            break  # stop if goal is reached
 
     return trajectory
 
@@ -281,20 +281,6 @@ def plot_hex_grid(U, goal_position=None, trajectory=None):
 
     plt.show()
 
-# def plot_trajectory(trajectory):
-#     '''Plot the trajectory of the agent on the hex grid'''
-#     x_coords, y_coords = zip(*[
-#         grid_to_xy(gx, gy) for (_, gx, gy) in trajectory
-#     ])
-
-#     plt.figure(figsize=(10, 8))
-#     plt.plot(x_coords, y_coords, marker='o')
-#     plt.title('Agent Trajectory')
-#     plt.xlabel('X Position')
-#     plt.ylabel('Y Position')
-#     plt.grid(True)
-#     plt.show()
-
 
 ###### Main Execution ######
 if __name__ == "__main__":
@@ -310,4 +296,3 @@ if __name__ == "__main__":
     # Plot results
     V = collapse_U_to_grid(U, grid_width, grid_height, directions=6)
     plot_hex_grid(V, goal_position, trajectory)
-    # plot_trajectory(trajectory)
