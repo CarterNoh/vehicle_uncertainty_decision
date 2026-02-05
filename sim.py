@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import RegularPolygon
+from matplotlib.patches import RegularPolygon, Circle
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 
@@ -42,9 +42,22 @@ prob_veer_lr = 0.025  # probability of veering when moving forward
 prob_veer_straight = 0.05  # probability of failing to turn
 
 # Simulation parameters
-start_state = (1, 0, 0)  # (direction robot is facing, gx, gy)
+start_state = (1, 0, 0, 0)  # (direction robot is facing, gx, gy, uncertainty)
 goal_position = (25, 25)  # (gx, gy) position of goal
 
+## define landmark positions (used to lower uncertainty when visited)
+landmarks = [
+    (hex_width * grid_width * 0.21, (3 * hex_size / 2) * grid_height * 0.25),
+    (hex_width * grid_width * 0.44, (3 * hex_size / 2) * grid_height * 0.77),
+    (hex_width * grid_width * 0.79, (3 * hex_size / 2) * grid_height * 0.63),
+]
+visibility_rad_sq = 6*hex_size**2  # squared radius within which landmarks are visible
+landmarks_visibility_set = {} # set of possible positions and number of landmarks visible from that location
+
+# Uncertainty parameters
+drift_magnitude = 1  # magnitude of drift in meters per time step
+uncertainty_threshold = 10  # threshold of uncertainty at end destination in meters
+landmark_uncertainty_reduction = 2  # amount by which uncertainty is reduced when a landmark is visible
 
 ###### Helper Functions ######
 def in_bounds(gx, gy):
@@ -58,15 +71,32 @@ def in_bounds(gx, gy):
 def build_states():
     '''Build all possible states in the MDP'''
     states = []
-    for dir in range(6):  # 6 possible directions
-        for gx in range(grid_width):
-            for gy in range(grid_height):
-                states.append((dir, gx, gy))
+    for unc in range(uncertainty_threshold + 2): # 0 to threshold + 1 (capped uncertainty)
+        for dir in range(6):  # 6 possible directions
+            for gx in range(grid_width):
+                for gy in range(grid_height):
+                    states.append((dir, gx, gy, unc))
     return states
+
+def build_landmarks_visibility_set():
+    global landmarks_visibility_set
+    '''Build set of positions where landmarks are visible.'''
+    landmarks_visibility_set = {}
+    for x in range(grid_width):
+        for y in range(grid_height):
+            # Compute world (x,y) position for the grid cell center
+            pos = grid_to_xy(x, y)
+            visible_landmarks = 0
+            for lm in landmarks:
+                dist_sq = (pos[0] - lm[0])**2 + (pos[1] - lm[1])**2
+                if dist_sq <= visibility_rad_sq:
+                    visible_landmarks += 1
+            # Key by integer grid coordinates so other code can index by (gx, gy)
+            landmarks_visibility_set[(x, y)] = visible_landmarks
 
 def move(state, action):
     '''Compute state after taking action'''
-    dir, gx, gy = state
+    dir, gx, gy, unc = state
 
     if action == 0: # move forward
         new_dir = dir
@@ -83,12 +113,22 @@ def move(state, action):
     new_gx = gx + dx
     new_gy = gy + dy
 
+    new_unc = unc + drift_magnitude  # increase uncertainty
+    try:
+        if in_bounds(new_gx, new_gy):
+            new_unc -= landmarks_visibility_set[new_gx, new_gy]*landmark_uncertainty_reduction  # reduce uncertainty based on visible landmarks
+            new_unc = max(new_unc, 0)  # uncertainty cannot be negative
+    except KeyError:
+        print("Not a valid move, not in landmarks_visibility_set")  # if new_pos is not in landmarks_visibility_set, raise an error
+    if new_unc > uncertainty_threshold:
+        new_unc = uncertainty_threshold + 1  # cap uncertainty at the threshold
+        
     # wall check
     if not in_bounds(new_gx, new_gy):
         # hit wall: stay in place, but orientation updates
-        return (new_dir, gx, gy)
+        return (new_dir, gx, gy, new_unc)
 
-    new_state = (new_dir, new_gx, new_gy)
+    new_state = (new_dir, new_gx, new_gy, new_unc)
     return new_state
 
 def get_neighbors(state, states):
@@ -135,7 +175,7 @@ def transition(state, action, new_state):
             return 1 - prob_veer_straight
         elif new_state == straight:
             return prob_veer_straight
-        elif new_state[0] == rot_right and new_state[1:] == state[1:]:
+        elif new_state[0] == rot_right and new_state[1:3] == state[1:3]:
             return 0.0
         else:
             return 0.0
@@ -143,8 +183,12 @@ def transition(state, action, new_state):
         return 0.0
 
 def reward(state, action, new_state):
+    unc = new_state[3]
     if (new_state[1], new_state[2]) == goal_position:
-        return 100  # reward for reaching goal
+        if unc <= uncertainty_threshold:
+            return 100  # reward for reaching goal
+        else:
+            return 0 # no reward for exceeding uncertainty threshold
     else:
         return -1  # small penalty for each step to encourage faster reaching of goal
 
@@ -202,7 +246,7 @@ def simulate(states, start_state, policy, steps):
         idx = np.random.choice(len(next_states), p=probs)
         state = next_states[idx]
         trajectory.append(state)
-        if state[1:] == goal_position:
+        if state[1:3] == goal_position:
             break  # stop if goal is reached
 
     return trajectory
@@ -220,7 +264,7 @@ def collapse_U_to_grid(U, grid_width, grid_height, directions):
     '''Collapse utility values U over directions to get grid utility for plotting'''
     V = np.full((grid_width, grid_height), -np.inf)
 
-    for (d, gx, gy), val in U.items():
+    for (_, gx, gy, _), val in U.items():
         V[gx, gy] = max(V[gx, gy], val)
 
     return V
@@ -260,8 +304,18 @@ def plot_hex_grid(U, goal_position=None, trajectory=None):
     
     # Plot trajectory if provided
     if trajectory is not None:
-        xs, ys = zip(*[grid_to_xy(gx, gy) for (_, gx, gy) in trajectory])
+        xs, ys = zip(*[grid_to_xy(gx, gy) for (_, gx, gy, _) in trajectory])
         ax.plot(xs, ys, '-o', color='black', linewidth=2, markersize=6)
+
+    # Plot landmarks: smaller star marker and a lightly shaded visible-radius circle
+    radius = visibility_rad_sq ** 0.5
+    for i, lm in enumerate(landmarks):
+        # shaded visibility circle
+        circ = Circle((lm[0], lm[1]), radius=radius, facecolor='red', edgecolor='red', alpha=0.12, linewidth=1, zorder=2)
+        ax.add_patch(circ)
+        # star marker (one-third size)
+        ax.plot(lm[0], lm[1], marker='*', color='red', markersize=5, zorder=3, label='Landmark' if i == 0 else None)
+    ax.legend()
 
     #Add colorbar
     sm = cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -282,10 +336,25 @@ def plot_hex_grid(U, goal_position=None, trajectory=None):
     plt.savefig('hex_grid_plot.png', dpi=150, bbox_inches='tight')
     plt.show()
 
+def plot_uncertainty(trajectory):
+    '''Plot uncertainty over time'''
+    uncertainties = [state[3] for state in trajectory]
+    plt.figure()
+    plt.plot(np.arange(len(uncertainties)), uncertainties)
+    plt.title('Uncertainty Over Time')
+    plt.xlabel('Time Step')
+    plt.ylabel('Uncertainty')
+    plt.grid(True)
+
+    plt.savefig('uncertainty.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
 
 ###### Main Execution ######
 if __name__ == "__main__":
     states = build_states()
+    build_landmarks_visibility_set()
+
     actions = [0, 1, 2]  # 0: move forward, 1: turn left, 2: turn right
 
     # Compute optimal policy using value iteration
@@ -297,3 +366,4 @@ if __name__ == "__main__":
     # Plot results
     V = collapse_U_to_grid(U, grid_width, grid_height, directions=6)
     plot_hex_grid(V, goal_position, trajectory)
+    plot_uncertainty(trajectory)
