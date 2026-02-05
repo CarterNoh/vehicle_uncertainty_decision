@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import RegularPolygon, Circle
@@ -44,6 +45,7 @@ prob_veer_straight = 0.05  # probability of failing to turn
 # Simulation parameters
 start_state = (1, 0, 0, 0)  # (direction robot is facing, gx, gy, uncertainty)
 goal_position = (25, 25)  # (gx, gy) position of goal
+goal_manhat_dist = goal_position[0] + goal_position[1]  # Long, inefficient path to goal (Unlikely to go this high)
 
 ## define landmark positions (used to lower uncertainty when visited)
 landmarks = [
@@ -57,7 +59,6 @@ landmarks_visibility_set = {} # set of possible positions and number of landmark
 # Uncertainty parameters
 drift_magnitude = 1  # magnitude of drift in meters per time step
 uncertainty_threshold = 10  # threshold of uncertainty at end destination in meters
-landmark_uncertainty_reduction = 2  # amount by which uncertainty is reduced when a landmark is visible
 
 ###### Helper Functions ######
 def in_bounds(gx, gy):
@@ -71,7 +72,7 @@ def in_bounds(gx, gy):
 def build_states():
     '''Build all possible states in the MDP'''
     states = []
-    for unc in range(uncertainty_threshold + 2): # 0 to threshold + 1 (capped uncertainty)
+    for unc in range(goal_manhat_dist + 1): # 0 to unc from long path
         for dir in range(6):  # 6 possible directions
             for gx in range(grid_width):
                 for gy in range(grid_height):
@@ -116,12 +117,10 @@ def move(state, action):
     new_unc = unc + drift_magnitude  # increase uncertainty
     try:
         if in_bounds(new_gx, new_gy):
-            new_unc -= landmarks_visibility_set[new_gx, new_gy]*landmark_uncertainty_reduction  # reduce uncertainty based on visible landmarks
-            new_unc = max(new_unc, 0)  # uncertainty cannot be negative
-    except KeyError:
-        print("Not a valid move, not in landmarks_visibility_set")  # if new_pos is not in landmarks_visibility_set, raise an error
-    if new_unc > uncertainty_threshold:
-        new_unc = uncertainty_threshold + 1  # cap uncertainty at the threshold
+            new_unc *= 0.75**landmarks_visibility_set[new_gx, new_gy]  # reduce uncertainty based on visible landmarks
+            new_unc = max(int(new_unc), 0)  # uncertainty cannot be negative
+    if new_unc > goal_manhat_dist:
+        new_unc = goal_manhat_dist  # cap uncertainty at the uncertainty of a long path
         
     # wall check
     if not in_bounds(new_gx, new_gy):
@@ -352,18 +351,31 @@ def plot_uncertainty(trajectory):
 
 ###### Main Execution ######
 if __name__ == "__main__":
+    start_time = time.time()
+    print("Building...")
     states = build_states()
     build_landmarks_visibility_set()
+    build_time = time.time()
+    print(f"Building state set took {build_time-start_time} s\n")
 
     actions = [0, 1, 2]  # 0: move forward, 1: turn left, 2: turn right
-
+    
     # Compute optimal policy using value iteration
+    print("Running Value Iteration...")
     policy, U = value_iteration(states, actions, transition, reward, gamma)
+    iter_time = time.time()
+    print(f"Value iteration process took {iter_time-build_time} s\n")
 
     # # Simulate agent following optimal policy
+    print("Simulating...")
     trajectory = simulate(states, start_state, policy, steps=50)
+    sim_time = time.time()
+    print(f"Simulated agent in {sim_time-iter_time} s\n")
 
     # Plot results
+    print("Plotting...")
     V = collapse_U_to_grid(U, grid_width, grid_height, directions=6)
     plot_hex_grid(V, goal_position, trajectory)
     plot_uncertainty(trajectory)
+    end_time = time.time()
+    print(f"Total time to run: {end_time-start_time} s")
