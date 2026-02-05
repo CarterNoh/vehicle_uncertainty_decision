@@ -20,9 +20,9 @@ Goal: Implement value iteration to find optimal policy for reaching goal from an
 
 ###### Parameters ######
 # Grid parameters (pointy-top hex grid)
-grid_width = 5  # width of hex grid
-grid_height = 5  # height of hex grid
-hex_size = 1.0  # size of one side of hex cell
+grid_width = 30  # width of hex grid
+grid_height = 30  # height of hex grid
+hex_size = 0.10  # size of one side of hex cell
 hex_height = 2 * hex_size
 hex_width = np.sqrt(3) * hex_size
 EVEN_ROW_DELTAS = [
@@ -37,13 +37,13 @@ ODD_ROW_DELTAS = [
 
 # MDP parameters
 gamma = 0.9  # discount factor
-num_value_iterations = 100  # number of iterations for value iteration
+num_value_iterations = 200  # number of iterations for value iteration
 prob_veer_lr = 0.025  # probability of veering when moving forward
 prob_veer_straight = 0.05  # probability of failing to turn
 
 # Simulation parameters
 start_state = (1, 0, 0)  # (direction robot is facing, gx, gy)
-goal_position = (4, 4)  # (gx, gy) position of goal
+goal_position = (25, 25)  # (gx, gy) position of goal
 
 
 ###### Helper Functions ######
@@ -279,6 +279,7 @@ def plot_hex_grid(U, goal_position=None, trajectory=None):
     ax.set_ylabel('Y Position')
     ax.grid(False)
 
+    plt.savefig('hex_grid_plot.png', dpi=150, bbox_inches='tight')
     plt.show()
 
 
