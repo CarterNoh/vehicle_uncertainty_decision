@@ -1,6 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import RegularPolygon
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 
 '''
 ##### CougUV Markov Decision Process Simulator #####
@@ -23,6 +25,15 @@ grid_height = 5  # height of hex grid
 hex_size = 1.0  # size of one side of hex cell
 hex_height = 2 * hex_size
 hex_width = np.sqrt(3) * hex_size
+EVEN_ROW_DELTAS = [
+    (1, 0), (0, 1), (-1, 1),
+    (-1, 0), (-1, -1), (0, -1)
+] # neighbor deltas for even rows because of grid system
+
+ODD_ROW_DELTAS = [
+    (1, 0), (1, 1), (0, 1),
+    (-1, 0), (0, -1), (1, -1)
+] # neighbor deltas for odd rows because of grid system 
 
 # MDP parameters
 gamma = 0.9  # discount factor
@@ -31,64 +42,66 @@ prob_veer_lr = 0.025  # probability of veering when moving forward
 prob_veer_straight = 0.05  # probability of failing to turn
 
 # Simulation parameters
-start_state = (1, 0.0, 0.0)  # (direction, x, y)
-goal_position = (2 * hex_width * grid_width / 2, 2 * (3 * hex_size / 2) * grid_height / 2)  # center of grid
+start_state = (1, 0, 0)  # (direction robot is facing, gx, gy)
+goal_position = (4, 4)  # (gx, gy) position of goal
 
 
 ###### Helper Functions ######
+def in_bounds(gx, gy):
+    '''Check if position is within grid bounds'''
+    if 0 <= gx < grid_width and 0 <= gy < grid_height:
+        return True
+    else:
+        return False
+
+
 def build_states():
     '''Build all possible states in the MDP'''
     states = []
     for dir in range(6):  # 6 possible directions
-        for x in range(grid_width):
-            for y in range(grid_height):
-                if y % 2 == 0:
-                    x_offset = 0
-                else:
-                    x_offset = hex_width / 2
-                states.append((dir, x * hex_width + x_offset, y * (3 * hex_size / 2)))
+        for gx in range(grid_width):
+            for gy in range(grid_height):
+                states.append((dir, gx, gy))
     return states
 
 def move(state, action):
     '''Compute state after taking action'''
-    dir = state[0]
-    pos = state[1:]
+    dir, gx, gy = state
+    # dir = state[0]
+    # pos = state[1:]
 
-    if action == 0:
+    if action == 0: # move forward
         new_dir = dir
-    elif action == 1:
+    elif action == 1: # turn left
         new_dir = (dir - 1) % 6
-    elif action == 2:
+    elif action == 2: # turn right
         new_dir = (dir + 1) % 6
     else:
         raise ValueError("Invalid action")
     
-    # directions: 0 to 5, starting from right and going counter-clockwise
-    if new_dir == 0:
-        new_pos = (pos[0] + hex_width, pos[1])
-    elif new_dir == 1:
-        new_pos = (pos[0] + hex_width / 2, pos[1] + 3 * hex_size / 2)
-    elif new_dir == 2:
-        new_pos = (pos[0] - hex_width / 2, pos[1] + 3 * hex_size / 2)
-    elif new_dir == 3:
-        new_pos = (pos[0] - hex_width, pos[1])
-    elif new_dir == 4:
-        new_pos = (pos[0] - hex_width / 2, pos[1] - 3 * hex_size / 2)
-    elif new_dir == 5:
-        new_pos = (pos[0] + hex_width / 2, pos[1] - 3 * hex_size / 2)
+    deltas = EVEN_ROW_DELTAS if gy % 2 == 0 else ODD_ROW_DELTAS
+    dx, dy = deltas[new_dir]
 
-    new_state = (new_dir, new_pos[0], new_pos[1])
+    new_gx = gx + dx
+    new_gy = gy + dy
+
+    # wall check
+    if not in_bounds(new_gx, new_gy):
+        # hit wall: stay in place, but orientation updates
+        return (new_dir, gx, gy)
+
+    new_state = (new_dir, new_gx, new_gy)
     return new_state
 
 def get_neighbors(state, states):
     '''Get neighboring states reachable from current state'''
-    neighbors = []
+    neighbors = set()
+    neighbors.add(state)  # include current state (hit a wall)
+
     for action in [0, 1, 2]:  # move forward, turn left, turn right
         new_state = move(state, action)
-        if new_state in states:
-            neighbors.append(new_state)
-        # TODO: need to account for when there are no valid moves (e.g., hitting wall)
-    return neighbors
+        neighbors.add(new_state)
+    return list(neighbors)
 
 
 ###### MDP Functions ######
@@ -99,8 +112,11 @@ def transition(state, action, new_state):
     straight = move(state, 0)
     left = move(state, 1)
     right = move(state, 2)
-    rot_left = state[0] - 1 % 6
-    rot_right = state[0] + 1 % 6
+    rot_left = (state[0] - 1) % 6
+    rot_right = (state[0] + 1) % 6
+
+    if straight == left == right == state: # hit wall, stay in place
+        return 1.0 if new_state == state else 0.0
 
     if action == 0:  # move forward
         if new_state == straight:
@@ -150,7 +166,8 @@ def value_iteration(states, actions, transition, reward, gamma, tolerance=1e-6):
                 for s_prime in neighbors:
                     prob = transition(s, a, s_prime)
                     r = reward(s, a, s_prime)
-                    q += r + gamma * prob * U[s_prime] # Bellman update
+                    # q += r + gamma * prob * U[s_prime] # Bellman update
+                    q += prob * (r + gamma * U[s_prime])
                 Q.append(q)
             U[s] = max(Q)
             policy[s] = np.argmax(Q)
@@ -176,6 +193,12 @@ def simulate(states, start_state, policy, steps):
             if prob > 0:
                 probs.append(prob)
                 next_states.append(s_prime)
+
+        if not next_states: # Safe-guard: no valid moves
+            state = state  #stay in place
+            trajectory.append(state)
+            continue
+
         probs = np.array(probs)
         probs /= probs.sum()  # normalize
         idx = np.random.choice(len(next_states), p=probs)
@@ -186,9 +209,29 @@ def simulate(states, start_state, policy, steps):
 
 
 ###### Visualization Functions ######
-def plot_hex_grid():
+def grid_to_xy(gx, gy):
+    '''Convert grid coordinates to x, y positions for plotting'''
+    x_offset = 0 if gy % 2 == 0 else hex_width / 2
+    x = gx * hex_width + x_offset
+    y = gy * (3 * hex_size / 2)
+    return x, y
+
+def collapse_U_to_grid(U, grid_width, grid_height, directions):
+    '''Collapse utility values U over directions to get grid utility for plotting'''
+    V = np.full((grid_width, grid_height), -np.inf)
+
+    for (d, gx, gy), val in U.items():
+        V[gx, gy] = max(V[gx, gy], val)
+
+    return V
+
+def plot_hex_grid(U, goal_position=None, trajectory=None):
     '''Plot the hexagonal grid'''
-    plt.figure(figsize=(10, 8))
+    # Normalize utility values for coloring
+    fig, ax = plt.subplots(figsize=(10, 8))
+    norm = mcolors.Normalize(vmin=min(U.flatten()), vmax=max(U.flatten()))
+    cmap = cm.get_cmap('viridis')
+    
     for x in range(grid_width):
         for y in range(grid_height):
             if y % 2 == 0:
@@ -197,30 +240,60 @@ def plot_hex_grid():
                 x_offset = hex_width / 2
             center_x = x * hex_width + x_offset
             center_y = y * (3 * hex_size / 2)
-            hexagon = RegularPolygon((center_x, center_y), numVertices=6, radius=hex_size,
-                                      facecolor='lightgrey', edgecolor='k')
-            plt.gca().add_patch(hexagon)
-    plt.xlim(-hex_width/2, grid_width * hex_width)
-    plt.ylim(-hex_height/2, grid_height * (3 * hex_size / 2) - hex_size / 2)
-    plt.gca().set_aspect('equal')
-    plt.title('Hexagonal Grid')
-    plt.xlabel('X Position')
-    plt.ylabel('Y Position')
-    plt.grid(False)
+            value = U[x, y]
+            color = cmap(norm(value))
+            hexagon = RegularPolygon(
+                (center_x, center_y), 
+                numVertices=6, 
+                radius=hex_size,
+                facecolor=color, 
+                edgecolor='k',
+                linewidth=1
+            )
+
+            # Highlight goal position
+            if goal_position is not None and (x, y) == goal_position:
+                hexagon.set_edgecolor('red')
+                hexagon.set_linewidth(3)
+                # hexagon.set_facecolor('gold')
+            ax.add_patch(hexagon)
+    
+    # Plot trajectory if provided
+    if trajectory is not None:
+        xs, ys = zip(*[grid_to_xy(gx, gy) for (_, gx, gy) in trajectory])
+        ax.plot(xs, ys, '-o', color='black', linewidth=2, markersize=6)
+
+    #Add colorbar
+    sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])  # required for older matplotlib versions
+
+    cbar = fig.colorbar(sm, ax=ax)
+    cbar.set_label('Value Function V')
+
+    # Finish plotting
+    ax.set_xlim(-hex_width/2, grid_width * hex_width)
+    ax.set_ylim(-hex_height/2, grid_height * (3 * hex_size / 2) - hex_size / 2)
+    ax.set_aspect('equal')
+    ax.set_title('Hexagonal Grid')
+    ax.set_xlabel('X Position')
+    ax.set_ylabel('Y Position')
+    ax.grid(False)
+
     plt.show()
 
-def plot_trajectory(trajectory):
-    '''Plot the trajectory of the agent on the hex grid'''
-    x_coords = [state[1] for state in trajectory]
-    y_coords = [state[2] for state in trajectory]
+# def plot_trajectory(trajectory):
+#     '''Plot the trajectory of the agent on the hex grid'''
+#     x_coords, y_coords = zip(*[
+#         grid_to_xy(gx, gy) for (_, gx, gy) in trajectory
+#     ])
 
-    plt.figure(figsize=(10, 8))
-    plt.plot(x_coords, y_coords, marker='o')
-    plt.title('Agent Trajectory')
-    plt.xlabel('X Position')
-    plt.ylabel('Y Position')
-    plt.grid(True)
-    plt.show()
+#     plt.figure(figsize=(10, 8))
+#     plt.plot(x_coords, y_coords, marker='o')
+#     plt.title('Agent Trajectory')
+#     plt.xlabel('X Position')
+#     plt.ylabel('Y Position')
+#     plt.grid(True)
+#     plt.show()
 
 
 ###### Main Execution ######
@@ -235,5 +308,6 @@ if __name__ == "__main__":
     trajectory = simulate(states, start_state, policy, steps=50)
 
     # Plot results
-    plot_hex_grid()
-    plot_trajectory(trajectory)
+    V = collapse_U_to_grid(U, grid_width, grid_height, directions=6)
+    plot_hex_grid(V, goal_position, trajectory)
+    # plot_trajectory(trajectory)
