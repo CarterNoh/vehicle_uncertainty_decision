@@ -110,8 +110,8 @@ def transition(state, action, new_state):
     straight = move(state, 0)
     left = move(state, 1)
     right = move(state, 2)
-    rot_left = (state[0] - 1) % 6
-    rot_right = (state[0] + 1) % 6
+    # rot_left = (state[0] - 1) % 6
+    # rot_right = (state[0] + 1) % 6
 
     if straight == left == right == state: # hit wall, stay in place
         return 1.0 if new_state == state else 0.0
@@ -128,6 +128,8 @@ def transition(state, action, new_state):
             return 1 - prob_veer_straight
         elif new_state == straight:
             return prob_veer_straight
+        # elif new_state[0] == rot_left and new_state[1:] == state[1:]:
+        #     return 0.0
         else: 
             return 0.0
     elif action == 2:  # turn right
@@ -135,8 +137,8 @@ def transition(state, action, new_state):
             return 1 - prob_veer_straight
         elif new_state == straight:
             return prob_veer_straight
-        elif new_state[0] == rot_right and new_state[1:] == state[1:]:
-            return 0.0
+        # elif new_state[0] == rot_right and new_state[1:] == state[1:]:
+        #     return 0.0
         else:
             return 0.0
     elif new_state == state:
@@ -230,7 +232,7 @@ def plot_hex_grid(U, goal_position=None, trajectory=None):
     # Normalize utility values for coloring
     fig, ax = plt.subplots(figsize=(10, 8))
     norm = mcolors.Normalize(vmin=min(U.flatten()), vmax=max(U.flatten()))
-    cmap = cm.get_cmap('viridis')
+    cmap = plt.get_cmap('viridis')
     
     for x in range(grid_width):
         for y in range(grid_height):
