@@ -17,8 +17,11 @@ Goal: Implement value iteration to find optimal policy for reaching goal from an
 ###### Parameters ######
 # Simulation parameters
 start_state = (1, 0, 0)  # (direction robot is facing, gx, gy)
-goal_position = (4, 4)  # (gx, gy) position of goal
+goal_position = (5, 5)  # (gx, gy) position of goal
 use_approx = True  # whether to use value function approximation with basis functions
+grid_width = 10  # width of hex grid
+grid_height = 10  # height of hex grid
+sim_steps = 100
 
 # MDP parameters
 gamma = 0.9  # discount factor
@@ -27,8 +30,7 @@ prob_veer_lr = 0.025  # probability of veering when moving forward
 prob_veer_straight = 0.05  # probability of failing to turn
 
 # Grid parameters (pointy-top hex grid)
-grid_width = 10  # width of hex grid
-grid_height = 10  # height of hex grid
+
 hex_size = 1.0  # size of one side of hex cell
 hex_height = 2 * hex_size
 hex_width = np.sqrt(3) * hex_size
@@ -255,7 +257,6 @@ def regression_weights(states, U):
         y.append(U[state])
     X = np.array(X)  # shape (num_states, num_features)
     y = np.array(y)  # shape (num_states,)
-    print(f"X shape: {X.shape}, y shape: {y.shape}")
 
     # Fit linear regression weights using least squares
     w = np.linalg.pinv(X) @ y # shape (num_features,)
@@ -364,7 +365,7 @@ if __name__ == "__main__":
         U, policy = value_iteration(states, actions, transition, reward, gamma)
         
     # Simulate agent following optimal policy
-    trajectory = simulate(start_state, policy, steps=50)
+    trajectory = simulate(start_state, policy, sim_steps)
     # Plot results
     V = collapse_U_to_grid(U, grid_width, grid_height, directions=6)
     plot_hex_grid(V, goal_position, trajectory)
