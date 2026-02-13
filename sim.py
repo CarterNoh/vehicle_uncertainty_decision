@@ -9,18 +9,18 @@ import matplotlib.colors as mcolors
 World: hexagonal grid with landmark(s) and goal
 State: direction agent is facing, cell coordinates of the agent
 Action: move forward, turn left, turn right
-Transition model: mostly deterministic, chance of veering left or right when moving forward, or going straight when turning
+Transition model: nearly deterministic, chance of veering left or right when moving forward, or going straight when turning
 
 Goal: Implement value iteration to find optimal policy for reaching goal from any starting state
 '''
 
 ###### Parameters ######
 # Simulation parameters
+grid_width = 10  # width of hex grid
+grid_height = 10  # height of hex grid
 start_state = (1, 0, 0)  # (direction robot is facing, gx, gy)
 goal_position = (5, 5)  # (gx, gy) position of goal
 use_approx = True  # whether to use value function approximation with basis functions
-grid_width = 10  # width of hex grid
-grid_height = 10  # height of hex grid
 sim_steps = 100
 
 # MDP parameters
@@ -30,7 +30,6 @@ prob_veer_lr = 0.025  # probability of veering when moving forward
 prob_veer_straight = 0.05  # probability of failing to turn
 
 # Grid parameters (pointy-top hex grid)
-
 hex_size = 1.0  # size of one side of hex cell
 hex_height = 2 * hex_size
 hex_width = np.sqrt(3) * hex_size
@@ -46,7 +45,6 @@ DELTAS_APPROX = [
     (2, 0), (1, 2), (-1, 2),
     (-2, 0), (-1, -2), (1, -2)
 ] # only on even rows for approx
-
 
 
 ###### Helper Functions ######
@@ -228,6 +226,7 @@ def simulate(start_state, policy, steps):
 
     return trajectory
 
+
 ###### Value Approximation Functions ######
 def basis_functions(state):
     '''Compute basis functions for a given state'''
@@ -269,6 +268,7 @@ def approx_values(states, w):
         features = basis_functions(s)
         values[s] = np.dot(w, features)
     return values
+
 
 ###### Visualization Functions ######
 def grid_to_xy(gx, gy):
