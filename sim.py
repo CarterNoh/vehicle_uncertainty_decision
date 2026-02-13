@@ -54,7 +54,6 @@ def in_bounds(gx, gy):
     else:
         return False
 
-
 def build_states():
     '''Build all possible states in the MDP'''
     states = []
@@ -91,7 +90,7 @@ def move(state, action):
     new_state = (new_dir, new_gx, new_gy)
     return new_state
 
-def get_neighbors(state, states):
+def get_neighbors(state):
     '''Get neighboring states reachable from current state'''
     neighbors = set()
     neighbors.add(state)  # include current state (hit a wall)
@@ -103,6 +102,41 @@ def get_neighbors(state, states):
 
 
 ###### MDP Functions ######
+def basis_functions(state):
+    '''Compute basis functions for a given state'''
+    dir, gx, gy = state
+    d = dir / 5.0  # normalize direction to [0, 1]
+    x = gx / (grid_width - 1)  # normalize x position to [0, 1]
+    y = gy / (grid_height - 1)  # normalize y position to [0, 1]
+    features = np.array([
+        1.0,  # bias term
+        d, x, y, # linear terms
+        d**2, x**2, y**2, # quadratic terms
+        d * x, d * y, x * y, # interaction terms
+        x**3, y**3, d**3, # cubic terms
+        x**2 * y, x**2 * d, x * y**2, x * d**2, y**2 * d, y * d**2, d * x * y, # mixed cubic terms
+        x**4, y**4, d**4, # quartic terms
+        x**3 * y, x**3 * d, x**2 * y**2, x**2 * y * d, x**2 * d**2, x * y**3, x * y**2 * d, x * y * d**2, x * d**3, y**3 * d, y**2 * d**2, y * d**3 # mixed quartic terms
+    ])
+    return features
+
+def regression_weights(states, U):
+    '''Fit regression weights to approximate value function U with basis functions'''
+    X = []
+    y = []
+    for state in states:
+        features = basis_functions(state)
+        X.append(features)
+        y.append(U[state])
+    X = np.array(X).T  # shape (num_features, num_states)
+    y = np.array(y).T  # shape (num_states,)
+
+    # Fit linear regression weights using least squares
+    w = np.linalg.pinv(X) @ y # shape (num_features,)
+    return w
+
+
+
 def transition(state, action, new_state):
     '''Probability of being in new_state given current state and action taken'''
 
@@ -110,8 +144,6 @@ def transition(state, action, new_state):
     straight = move(state, 0)
     left = move(state, 1)
     right = move(state, 2)
-    # rot_left = (state[0] - 1) % 6
-    # rot_right = (state[0] + 1) % 6
 
     if straight == left == right == state: # hit wall, stay in place
         return 1.0 if new_state == state else 0.0
@@ -128,8 +160,6 @@ def transition(state, action, new_state):
             return 1 - prob_veer_straight
         elif new_state == straight:
             return prob_veer_straight
-        # elif new_state[0] == rot_left and new_state[1:] == state[1:]:
-        #     return 0.0
         else: 
             return 0.0
     elif action == 2:  # turn right
@@ -137,8 +167,6 @@ def transition(state, action, new_state):
             return 1 - prob_veer_straight
         elif new_state == straight:
             return prob_veer_straight
-        # elif new_state[0] == rot_right and new_state[1:] == state[1:]:
-        #     return 0.0
         else:
             return 0.0
     elif new_state == state:
@@ -160,7 +188,7 @@ def value_iteration(states, actions, transition, reward, gamma, tolerance=1e-6):
         for s in states:
             u = U[s] # store old value
             Q = []
-            neighbors = get_neighbors(s, states)
+            neighbors = get_neighbors(s)
             for a in actions:
                 q = 0
                 for s_prime in neighbors:
@@ -178,7 +206,7 @@ def value_iteration(states, actions, transition, reward, gamma, tolerance=1e-6):
 
     return policy, U
 
-def simulate(states, start_state, policy, steps):
+def simulate(start_state, policy, steps):
     '''Simulate agent following policy from start_state for given number of steps'''
     state = start_state
     trajectory = [state]
@@ -188,7 +216,7 @@ def simulate(states, start_state, policy, steps):
         # sample new state based on transition probabilities
         probs = []
         next_states = []
-        for s_prime in get_neighbors(state, states):
+        for s_prime in get_neighbors(state):
             prob = transition(state, action, s_prime)
             if prob > 0:
                 probs.append(prob)
