@@ -40,14 +40,11 @@ ODD_ROW_DELTAS = [
     (1, 0), (1, 1), (0, 1),
     (-1, 0), (0, -1), (1, -1)
 ] # neighbor deltas for odd rows because of grid system 
-EVEN_ROW_DELTAS_APPROX = [
-    (1, 1), (0, 2), (-2, 1),
-    (-2, -1), (0, -2), (1, -1)
-] # neighbor deltas for even rows because of grid system
-ODD_ROW_DELTAS_APPROX = [
-    (2, 1), (0, 2), (-1, 1),
-    (-1, -1), (0, -2), (2, -1)
-] # neighbor deltas for odd rows because of grid system 
+DELTAS_APPROX = [
+    (2, 0), (1, 2), (-1, 2),
+    (-2, 0), (-1, -2), (1, -2)
+] # only on even rows for approx
+
 
 
 ###### Helper Functions ######
@@ -72,12 +69,12 @@ def build_approx_states():
     # Group cells into clusters of 7: turns pointy-top grid of small hexagons into flat-top grid of larger hexagons
     # Include each direction for each cluster (directions now rotated by 1/6th turn, 1 is up-right)
     approx_states = []
-    for gy in range(0, grid_height):
-        for gx in range(0, grid_width, 3):
+    for gy in range(0, grid_height, 2):
+        for gx in range(0, grid_width, 2):
             for dir in range(6):
-                if gy % 2 == 0: # even row
+                if gy % 4 == 0: # "even" row
                     approx_states.append((dir, gx, gy))
-                else: # odd row
+                else: # "odd" row
                     approx_states.append((dir, gx+1, gy))
     return approx_states
 
@@ -94,7 +91,7 @@ def move(state, action, approx=False):
     
     deltas = EVEN_ROW_DELTAS if gy % 2 == 0 else ODD_ROW_DELTAS
     if approx:
-        deltas = EVEN_ROW_DELTAS_APPROX if gy % 2 == 0 else ODD_ROW_DELTAS_APPROX
+        deltas = DELTAS_APPROX
     dx, dy = deltas[new_dir]
 
     new_gx = gx + dx
@@ -182,22 +179,54 @@ def value_iteration(states, actions, transition, reward, gamma, tolerance=1e-6):
 
     return U, policy
 
-def extract_policy(U, states, actions, transition, reward, gamma, approx=False):
+def extract_policy(U, states, actions, transition, reward, gamma):
     '''Extract policy from value function U'''
     policy = {}
     for s in states:
         Q = []
-        neighbors = get_neighbors(s, approx)
+        neighbors = get_neighbors(s)
         for a in actions:
             q = 0
             for s_prime in neighbors:
-                prob = transition(s, a, s_prime, approx)
+                prob = transition(s, a, s_prime)
                 r = reward(s, a, s_prime)
                 q += prob * (r + gamma * U[s_prime])
             Q.append(q)
         policy[s] = np.argmax(Q)
     return policy
 
+def simulate(start_state, policy, steps):
+    '''Simulate agent following policy from start_state for given number of steps'''
+    state = start_state
+    trajectory = [state]
+
+    for _ in range(steps):
+        action = policy[state]
+        # sample new state based on transition probabilities
+        probs = []
+        next_states = []
+        for s_prime in get_neighbors(state):
+            prob = transition(state, action, s_prime)
+            if prob > 0:
+                probs.append(prob)
+                next_states.append(s_prime)
+
+        if not next_states: # Safe-guard: no valid moves
+            state = state  #stay in place
+            trajectory.append(state)
+            continue
+
+        probs = np.array(probs)
+        probs /= probs.sum()  # normalize
+        idx = np.random.choice(len(next_states), p=probs)
+        state = next_states[idx]
+        trajectory.append(state)
+        if state[1:] == goal_position:
+            break  # stop if goal is reached
+
+    return trajectory
+
+###### Value Approximation Functions ######
 def basis_functions(state):
     '''Compute basis functions for a given state'''
     dir, gx, gy = state
@@ -240,38 +269,6 @@ def approx_values(states, w):
         values[s] = np.dot(w, features)
     return values
 
-def simulate(start_state, policy, steps):
-    '''Simulate agent following policy from start_state for given number of steps'''
-    state = start_state
-    trajectory = [state]
-
-    for _ in range(steps):
-        action = policy[state]
-        # sample new state based on transition probabilities
-        probs = []
-        next_states = []
-        for s_prime in get_neighbors(state):
-            prob = transition(state, action, s_prime)
-            if prob > 0:
-                probs.append(prob)
-                next_states.append(s_prime)
-
-        if not next_states: # Safe-guard: no valid moves
-            state = state  #stay in place
-            trajectory.append(state)
-            continue
-
-        probs = np.array(probs)
-        probs /= probs.sum()  # normalize
-        idx = np.random.choice(len(next_states), p=probs)
-        state = next_states[idx]
-        trajectory.append(state)
-        if state[1:] == goal_position:
-            break  # stop if goal is reached
-
-    return trajectory
-
-
 ###### Visualization Functions ######
 def grid_to_xy(gx, gy):
     '''Convert grid coordinates to x, y positions for plotting'''
@@ -289,38 +286,26 @@ def collapse_U_to_grid(U, grid_width, grid_height, directions):
 
     return V
 
-def plot_hexagon(gx, gy, U, cmap, norm, ax, goal=False, approx=False):
+def plot_hexagon(gx, gy, U, cmap, norm, ax, goal=False):
     '''Helper function to plot a single hexagon'''
-    rad = hex_size
-    orientation = 0 # pointy-top hexagons by default
-    edgecolor = 'k'
-    linewidth = 1
     x_offset = hex_width / 2
     if gy % 2 == 0:
         x_offset = 0
-    
     center_x = gx * hex_width + x_offset
     center_y = gy * (3 * hex_size / 2)
     value = U[gx, gy]
     color = cmap(norm(value))
-    if goal:
-        edgecolor = 'red'
-        linewidth = 3
-    if approx:
-        rad = hex_size * np.sqrt(3)
-        orientation = np.pi / 6
-        color = 'none'
-        edgecolor = 'blue'
-
     hexagon = RegularPolygon(
         (center_x, center_y), 
         numVertices=6, 
-        radius=rad,
+        radius=hex_size,
         facecolor=color, 
-        edgecolor=edgecolor,
-        linewidth=linewidth,
-        orientation=orientation
+        edgecolor='k',
+        linewidth=1,
     )
+    if goal:
+        hexagon.set_edgecolor('red')
+        hexagon.set_linewidth(3)
     ax.add_patch(hexagon)
 
 def plot_hex_grid(U, goal_position=None, trajectory=None):
@@ -330,18 +315,10 @@ def plot_hex_grid(U, goal_position=None, trajectory=None):
     norm = mcolors.Normalize(vmin=min(U.flatten()), vmax=max(U.flatten()))
     cmap = plt.get_cmap('viridis')
     
+    # Plot hexagons for each cell in the grid
     for gx in range(grid_width):
         for gy in range(grid_height):
             plot_hexagon(gx, gy, U, cmap, norm, ax)
-
-    # # Plot approximation states
-    if use_approx:
-        for gy in range(0, grid_height):
-            for gx in range(0, grid_width-1, 3):
-                    if gy % 2 == 0: # even row
-                        plot_hexagon(gx, gy, U, cmap, norm, ax, approx=True)
-                    else: # odd row
-                        plot_hexagon(gx+1, gy, U, cmap, norm, ax, approx=True)
 
     # Highlight goal position
     if goal_position is not None: # and (x, y) == goal_position
