@@ -20,7 +20,7 @@ Goal: Implement value iteration to find optimal policy for reaching goal from an
 grid_width = 20  # width of hex grid
 grid_height = 20  # height of hex grid
 start_state = (1, 0, 0, 0)  # (direction robot is facing, gx, gy, uncertainty)
-goal_position = (17, 17)  # (gx, gy) position of goal
+goal_position = (18, 18)  # (gx, gy) position of goal
 goal_manhat_dist = goal_position[0] + goal_position[1]  # Long, inefficient path to goal (Unlikely to go this high)
 use_approx = False  # whether to use value function approximation with basis functions
 sim_steps = 100
@@ -52,7 +52,7 @@ DELTAS_APPROX = [
 landmarks = [
     (hex_width * grid_width * 0.21, (3 * hex_size / 2) * grid_height * 0.25),
     (hex_width * grid_width * 0.44, (3 * hex_size / 2) * grid_height * 0.71),
-    (hex_width * grid_width * 0.76, (3 * hex_size / 2) * grid_height * 0.63),
+    (hex_width * grid_width * 0.72, (3 * hex_size / 2) * grid_height * 0.63),
 ]
 visibility_rad_sq = 6*hex_size**2  # squared radius within which landmarks are visible
 landmarks_visibility_set = {} # set of possible positions and number of landmarks visible from that location
