@@ -1,6 +1,7 @@
+import time
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import RegularPolygon
+from matplotlib.patches import RegularPolygon, Circle
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 
@@ -16,21 +17,22 @@ Goal: Implement value iteration to find optimal policy for reaching goal from an
 
 ###### Parameters ######
 # Simulation parameters
-grid_width = 10  # width of hex grid
-grid_height = 10  # height of hex grid
-start_state = (1, 0, 0)  # (direction robot is facing, gx, gy)
-goal_position = (5, 5)  # (gx, gy) position of goal
-use_approx = True  # whether to use value function approximation with basis functions
+grid_width = 20  # width of hex grid
+grid_height = 20  # height of hex grid
+start_state = (1, 0, 0, 0)  # (direction robot is facing, gx, gy, uncertainty)
+goal_position = (17, 17)  # (gx, gy) position of goal
+goal_manhat_dist = goal_position[0] + goal_position[1]  # Long, inefficient path to goal (Unlikely to go this high)
+use_approx = False  # whether to use value function approximation with basis functions
 sim_steps = 100
 
 # MDP parameters
 gamma = 0.9  # discount factor
-num_value_iterations = 100  # number of iterations for value iteration
+num_value_iterations = 200  # number of iterations for value iteration
 prob_veer_lr = 0.025  # probability of veering when moving forward
 prob_veer_straight = 0.05  # probability of failing to turn
 
 # Grid parameters (pointy-top hex grid)
-hex_size = 1.0  # size of one side of hex cell
+hex_size = 0.1  # size of one side of hex cell
 hex_height = 2 * hex_size
 hex_width = np.sqrt(3) * hex_size
 EVEN_ROW_DELTAS = [
@@ -46,6 +48,18 @@ DELTAS_APPROX = [
     (-2, 0), (-1, -2), (1, -2)
 ] # only on even rows for approx
 
+## define landmark positions (used to lower uncertainty when visited)
+landmarks = [
+    (hex_width * grid_width * 0.21, (3 * hex_size / 2) * grid_height * 0.25),
+    (hex_width * grid_width * 0.44, (3 * hex_size / 2) * grid_height * 0.71),
+    (hex_width * grid_width * 0.76, (3 * hex_size / 2) * grid_height * 0.63),
+]
+visibility_rad_sq = 6*hex_size**2  # squared radius within which landmarks are visible
+landmarks_visibility_set = {} # set of possible positions and number of landmarks visible from that location
+
+# Uncertainty parameters
+drift_magnitude = 1  # magnitude of drift in meters per time step
+uncertainty_threshold = 10  # threshold of uncertainty at end destination in meters
 
 ###### Helper Functions ######
 def in_bounds(gx, gy):
@@ -58,10 +72,11 @@ def in_bounds(gx, gy):
 def build_states():
     '''Build all possible states in the MDP'''
     states = []
-    for gx in range(grid_width):
-        for gy in range(grid_height):
-            for dir in range(6):  # 6 possible directions
-                states.append((dir, gx, gy))
+    for unc in range(goal_manhat_dist + 1): # 0 to unc from long path
+        for gx in range(grid_width):
+            for gy in range(grid_height):
+                for dir in range(6):  # 6 possible directions
+                    states.append((dir, gx, gy, unc))
     return states
 
 def build_approx_states():
@@ -69,18 +84,35 @@ def build_approx_states():
     # Group cells into clusters of 7: turns pointy-top grid of small hexagons into flat-top grid of larger hexagons
     # Include each direction for each cluster (directions now rotated by 1/6th turn, 1 is up-right)
     approx_states = []
-    for gy in range(0, grid_height, 2):
-        for gx in range(0, grid_width, 2):
-            for dir in range(6):
-                if gy % 4 == 0: # "even" row
-                    approx_states.append((dir, gx, gy))
-                else: # "odd" row
-                    approx_states.append((dir, gx+1, gy))
+    for unc in range(goal_manhat_dist + 1): # 0 to unc from long path
+        for gy in range(0, grid_height, 2):
+            for gx in range(0, grid_width, 2):
+                for dir in range(6):
+                    if gy % 4 == 0: # "even" row
+                        approx_states.append((dir, gx, gy, unc))
+                    else: # "odd" row
+                        approx_states.append((dir, gx+1, gy, unc))
     return approx_states
+
+def build_landmarks_visibility_set():
+    global landmarks_visibility_set
+    '''Build set of positions where landmarks are visible.'''
+    landmarks_visibility_set = {}
+    for x in range(grid_width):
+        for y in range(grid_height):
+            # Compute world (x,y) position for the grid cell center
+            pos = grid_to_xy(x, y)
+            visible_landmarks = 0
+            for lm in landmarks:
+                dist_sq = (pos[0] - lm[0])**2 + (pos[1] - lm[1])**2
+                if dist_sq <= visibility_rad_sq:
+                    visible_landmarks += 1
+            # Key by integer grid coordinates so other code can index by (gx, gy)
+            landmarks_visibility_set[(x, y)] = visible_landmarks
 
 def move(state, action, approx=False):
     '''Compute state after taking action'''
-    dir, gx, gy = state
+    dir, gx, gy, unc = state
 
     if action == 0: # move forward
         new_dir = dir
@@ -97,12 +129,19 @@ def move(state, action, approx=False):
     new_gx = gx + dx
     new_gy = gy + dy
 
+    new_unc = unc + drift_magnitude  # increase uncertainty
+    if in_bounds(new_gx, new_gy):
+                new_unc *= 0.75**landmarks_visibility_set[new_gx, new_gy]  # reduce uncertainty based on visible landmarks
+                new_unc = max(int(new_unc), 0)  # uncertainty cannot be negative
+    if new_unc > goal_manhat_dist:
+        new_unc = goal_manhat_dist  # cap uncertainty at the uncertainty of a long path
+    
     # wall check
     if not in_bounds(new_gx, new_gy):
         # hit wall: stay in place, but orientation updates
-        return (new_dir, gx, gy)
+        return (new_dir, gx, gy, new_unc)
 
-    new_state = (new_dir, new_gx, new_gy)
+    new_state = (new_dir, new_gx, new_gy, new_unc)
     return new_state
 
 def get_neighbors(state, approx=False):
@@ -147,8 +186,12 @@ def transition(state, action, new_state, approx=False):
     return 0.0 
 
 def reward(state, action, new_state):
+    unc = new_state[3]
     if (new_state[1], new_state[2]) == goal_position:
-        return 100  # reward for reaching goal
+        if unc <= uncertainty_threshold:
+            return 100  # reward for reaching goal
+        else:
+            return 0 # no reward for exceeding uncertainty threshold
     else:
         return -1  # small penalty for each step to encourage faster reaching of goal
 
@@ -190,6 +233,7 @@ def extract_policy(U, states, actions, transition, reward, gamma):
             for s_prime in neighbors:
                 prob = transition(s, a, s_prime)
                 r = reward(s, a, s_prime)
+                # q += r + gamma * prob * U[s_prime] # Bellman update
                 q += prob * (r + gamma * U[s_prime])
             Q.append(q)
         policy[s] = np.argmax(Q)
@@ -221,7 +265,7 @@ def simulate(start_state, policy, steps):
         idx = np.random.choice(len(next_states), p=probs)
         state = next_states[idx]
         trajectory.append(state)
-        if state[1:] == goal_position:
+        if state[1:3] == goal_position:
             break  # stop if goal is reached
 
     return trajectory
@@ -230,19 +274,20 @@ def simulate(start_state, policy, steps):
 ###### Value Approximation Functions ######
 def basis_functions(state):
     '''Compute basis functions for a given state'''
-    dir, gx, gy = state
+    dir, gx, gy, unc = state
     d = dir / 5.0  # normalize direction to [0, 1]
     x = gx / (grid_width - 1)  # normalize x position to [0, 1]
     y = gy / (grid_height - 1)  # normalize y position to [0, 1]
+    u = unc / (goal_manhat_dist)  # normalize uncertainty to [0, 1]
     features = np.array([
         1.0,  # bias term
-        d, x, y, # linear terms
-        d**2, x**2, y**2, # quadratic terms
-        d * x, d * y, x * y, # interaction terms
-        x**3, y**3, d**3, # cubic terms
-        x**2 * y, x**2 * d, x * y**2, x * d**2, y**2 * d, y * d**2, d * x * y, # mixed cubic terms
-        x**4, y**4, d**4, # quartic terms
-        x**3 * y, x**3 * d, x**2 * y**2, x**2 * y * d, x**2 * d**2, x * y**3, x * y**2 * d, x * y * d**2, x * d**3, y**3 * d, y**2 * d**2, y * d**3 # mixed quartic terms
+        d, x, y, u, # linear terms
+        d**2, x**2, y**2, u**2, # quadratic terms
+        d * x, d * y, d * u, x * y, x * u, y * u, # interaction terms
+        x**3, y**3, d**3, u**3, # cubic terms
+        x**2 * y, x**2 * d, x**2 * u, x * y**2, x * d**2, x * u**2, y**2 * d, y**2 * u, y * d**2, y * u**2, d**2 * u, d * u**2, d * x * y * u, # mixed cubic terms
+        x**4, y**4, d**4, u**4, # quartic terms
+        x**3 * y, x**3 * d, x**3 * u, x**2 * y**2, x**2 * y * d, x**2 * y * u, x**2 * d**2, x**2 * d * u, x**2 * u**2, x * y**3, x * y**2 * d, x * y**2 * u, x * y * d**2, x * y * d * u, x * y * u**2, x * d**3, x * d**2 * u, x * d * u**2, x * u**3, y**3 * d, y**3 * u, y**2 * d**2, y**2 * d * u, y**2 * u**2, y * d**3, y * d**2 * u, y * d * u**2, y * u**3, d**3 * u, d**2 * u**2, d * u**3 # mixed quartic terms
     ])
     return features
 
@@ -282,7 +327,7 @@ def collapse_U_to_grid(U, grid_width, grid_height, directions):
     '''Collapse utility values U over directions to get grid utility for plotting'''
     V = np.full((grid_width, grid_height), -np.inf)
 
-    for (d, gx, gy), val in U.items():
+    for (_, gx, gy, _), val in U.items():
         V[gx, gy] = max(V[gx, gy], val)
 
     return V
@@ -327,8 +372,18 @@ def plot_hex_grid(U, goal_position=None, trajectory=None):
     
     # Plot trajectory if provided
     if trajectory is not None:
-        xs, ys = zip(*[grid_to_xy(gx, gy) for (_, gx, gy) in trajectory])
+        xs, ys = zip(*[grid_to_xy(gx, gy) for (_, gx, gy, _) in trajectory])
         ax.plot(xs, ys, '-o', color='black', linewidth=2, markersize=6)
+
+    # Plot landmarks: smaller star marker and a lightly shaded visible-radius circle
+    radius = visibility_rad_sq ** 0.5
+    for i, lm in enumerate(landmarks):
+        # shaded visibility circle
+        circ = Circle((lm[0], lm[1]), radius=radius, facecolor='red', edgecolor='red', alpha=0.12, linewidth=1, zorder=2)
+        ax.add_patch(circ)
+        # star marker (one-third size)
+        ax.plot(lm[0], lm[1], marker='*', color='red', markersize=5, zorder=3, label='Landmark' if i == 0 else None)
+    ax.legend()
 
     #Add colorbar
     sm = cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -345,27 +400,61 @@ def plot_hex_grid(U, goal_position=None, trajectory=None):
     ax.set_xlabel('X Position')
     ax.set_ylabel('Y Position')
     ax.grid(False)
-
+    
+    plt.savefig('hex_grid_plot.png', dpi=150, bbox_inches='tight')
     plt.show()
 
+def plot_uncertainty(trajectory):
+    '''Plot uncertainty over time'''
+    uncertainties = [state[3] for state in trajectory]
+    plt.figure()
+    plt.plot(np.arange(len(uncertainties)), uncertainties)
+    plt.title('Uncertainty Over Time')
+    plt.xlabel('Time Step')
+    plt.ylabel('Uncertainty')
+    plt.grid(True)
+
+    plt.savefig('uncertainty.png', dpi=150, bbox_inches='tight')
+    plt.show()
 
 ###### Main Execution ######
 if __name__ == "__main__":
+
+    start_time = time.time()
+    print("Building...")
     states = build_states()
+    build_landmarks_visibility_set()
+    build_time = time.time()
+    print(f"Building state set took {build_time-start_time} s\n")
+
     actions = [0, 1, 2]  # 0: move forward, 1: turn left, 2: turn right
 
     # Compute optimal policy using value iteration
     if use_approx:
+        print("Running Approximate Value Iteration...")
         approx_states = build_approx_states()
         U_approx, _ = value_iteration(approx_states, actions, transition, reward, gamma)
         w = regression_weights(approx_states, U_approx)
         U = approx_values(states, w)
         policy = extract_policy(U, states, actions, transition, reward, gamma)
+        iter_time = time.time()
+        print(f"Approximate value iteration process took {iter_time-build_time} s\n")    
     else:
+        print("Running Value Iteration...")
         U, policy = value_iteration(states, actions, transition, reward, gamma)
-        
+        iter_time = time.time()
+        print(f"Value iteration process took {iter_time-build_time} s\n")    
+    
+    print("Simulating...")
     # Simulate agent following optimal policy
     trajectory = simulate(start_state, policy, sim_steps)
+    sim_time = time.time()
+    print(f"Simulated agent in {sim_time-iter_time} s\n")
+
     # Plot results
+    print("Plotting...")
     V = collapse_U_to_grid(U, grid_width, grid_height, directions=6)
     plot_hex_grid(V, goal_position, trajectory)
+    plot_uncertainty(trajectory)
+    end_time = time.time()
+    print(f"Total time to run: {end_time-start_time} s")
