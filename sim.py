@@ -20,14 +20,14 @@ Goal: Implement value iteration to find optimal policy for reaching goal from an
 grid_width = 20  # width of hex grid
 grid_height = 20  # height of hex grid
 start_state = (1, 0, 0, 0)  # (direction robot is facing, gx, gy, uncertainty)
-goal_position = (18, 18)  # (gx, gy) position of goal
+goal_position = (16, 16)  # (gx, gy) position of goal
 goal_manhat_dist = goal_position[0] + goal_position[1]  # Long, inefficient path to goal (Unlikely to go this high)
 use_approx = False  # whether to use value function approximation with basis functions
 sim_steps = 100
 
 # MDP parameters
 gamma = 0.9  # discount factor
-num_value_iterations = 200  # number of iterations for value iteration
+num_value_iterations = 200  # max number of iterations for value iteration
 prob_veer_lr = 0.025  # probability of veering when moving forward
 prob_veer_straight = 0.05  # probability of failing to turn
 
@@ -54,7 +54,7 @@ landmarks = [
     (hex_width * grid_width * 0.44, (3 * hex_size / 2) * grid_height * 0.71),
     (hex_width * grid_width * 0.72, (3 * hex_size / 2) * grid_height * 0.63),
 ]
-visibility_rad_sq = 6*hex_size**2  # squared radius within which landmarks are visible
+visibility_rad_sq = (2*hex_width)**2  # squared radius within which landmarks are visible
 landmarks_visibility_set = {} # set of possible positions and number of landmarks visible from that location
 
 # Uncertainty parameters
@@ -95,9 +95,7 @@ def build_approx_states():
     return approx_states
 
 def build_landmarks_visibility_set():
-    global landmarks_visibility_set
     '''Build set of positions where landmarks are visible.'''
-    landmarks_visibility_set = {}
     for x in range(grid_width):
         for y in range(grid_height):
             # Compute world (x,y) position for the grid cell center
@@ -130,6 +128,9 @@ def move(state, action, approx=False):
     new_gy = gy + dy
 
     new_unc = unc + drift_magnitude  # increase uncertainty
+    if approx:
+        new_unc += drift_magnitude # increase uncertainty more for larger steps in approximation 
+
     if in_bounds(new_gx, new_gy):
                 new_unc *= 0.75**landmarks_visibility_set[new_gx, new_gy]  # reduce uncertainty based on visible landmarks
                 new_unc = max(int(new_unc), 0)  # uncertainty cannot be negative
@@ -141,8 +142,7 @@ def move(state, action, approx=False):
         # hit wall: stay in place, but orientation updates
         return (new_dir, gx, gy, new_unc)
 
-    new_state = (new_dir, new_gx, new_gy, new_unc)
-    return new_state
+    return (new_dir, new_gx, new_gy, new_unc)
 
 def get_neighbors(state, approx=False):
     '''Get neighboring states reachable from current state'''
@@ -154,6 +154,17 @@ def get_neighbors(state, approx=False):
         neighbors.add(new_state)
     return list(neighbors)
 
+def get_approx_goal_states():
+    '''Get set of states that are close enough to goal to be considered reaching it for approximation'''
+    gx, gy = goal_position
+    deltas = EVEN_ROW_DELTAS if gy % 2 == 0 else ODD_ROW_DELTAS
+    goal_approx_set = [goal_position]  # include the actual goal position
+    for dx, dy in deltas:
+        new_gx = gx + dx
+        new_gy = gy + dy
+        if in_bounds(new_gx, new_gy):
+            goal_approx_set.append((new_gx, new_gy))
+    return goal_approx_set
 
 ###### MDP Functions ######
 def transition(state, action, new_state, approx=False):
@@ -185,13 +196,10 @@ def transition(state, action, new_state, approx=False):
         
     return 0.0 
 
-def reward(state, action, new_state):
+def reward(state, action, new_state, approx=False):
     unc = new_state[3]
-    if (new_state[1], new_state[2]) == goal_position:
-        if unc <= uncertainty_threshold:
-            return 100  # reward for reaching goal
-        else:
-            return 0 # no reward for exceeding uncertainty threshold
+    if (new_state[1], new_state[2]) == goal_position or (approx and (new_state[1], new_state[2]) in get_approx_goal_states()):
+        return 100 if unc <= uncertainty_threshold else 0
     else:
         return -1  # small penalty for each step to encourage faster reaching of goal
 
@@ -210,7 +218,7 @@ def value_iteration(states, actions, transition, reward, gamma, tolerance=1e-6):
                 q = 0
                 for s_prime in neighbors:
                     prob = transition(s, a, s_prime, use_approx)
-                    r = reward(s, a, s_prime)
+                    r = reward(s, a, s_prime, use_approx)
                     q += prob * (r + gamma * U[s_prime]) # Bellman update
                 Q.append(q)
             U[s] = max(Q)
@@ -221,23 +229,6 @@ def value_iteration(states, actions, transition, reward, gamma, tolerance=1e-6):
             break
 
     return U, policy
-
-def extract_policy(U, states, actions, transition, reward, gamma):
-    '''Extract policy from value function U'''
-    policy = {}
-    for s in states:
-        Q = []
-        neighbors = get_neighbors(s)
-        for a in actions:
-            q = 0
-            for s_prime in neighbors:
-                prob = transition(s, a, s_prime)
-                r = reward(s, a, s_prime)
-                # q += r + gamma * prob * U[s_prime] # Bellman update
-                q += prob * (r + gamma * U[s_prime])
-            Q.append(q)
-        policy[s] = np.argmax(Q)
-    return policy
 
 def simulate(start_state, policy, steps):
     '''Simulate agent following policy from start_state for given number of steps'''
@@ -270,7 +261,6 @@ def simulate(start_state, policy, steps):
 
     return trajectory
 
-
 ###### Value Approximation Functions ######
 def basis_functions(state):
     '''Compute basis functions for a given state'''
@@ -284,11 +274,24 @@ def basis_functions(state):
         d, x, y, u, # linear terms
         d**2, x**2, y**2, u**2, # quadratic terms
         d * x, d * y, d * u, x * y, x * u, y * u, # interaction terms
-        x**3, y**3, d**3, u**3, # cubic terms
-        x**2 * y, x**2 * d, x**2 * u, x * y**2, x * d**2, x * u**2, y**2 * d, y**2 * u, y * d**2, y * u**2, d**2 * u, d * u**2, d * x * y * u, # mixed cubic terms
-        x**4, y**4, d**4, u**4, # quartic terms
-        x**3 * y, x**3 * d, x**3 * u, x**2 * y**2, x**2 * y * d, x**2 * y * u, x**2 * d**2, x**2 * d * u, x**2 * u**2, x * y**3, x * y**2 * d, x * y**2 * u, x * y * d**2, x * y * d * u, x * y * u**2, x * d**3, x * d**2 * u, x * d * u**2, x * u**3, y**3 * d, y**3 * u, y**2 * d**2, y**2 * d * u, y**2 * u**2, y * d**3, y * d**2 * u, y * d * u**2, y * u**3, d**3 * u, d**2 * u**2, d * u**3 # mixed quartic terms
+        d**3, x**3, y**3, u**3, # cubic terms
+        d**2 * x, d**2 * y, d**2 * u, 
+        x**2 * d, x**2 * y, x**2 * u, 
+        y**2 * d, y**2 * x, y**2 * u, 
+        u**2 * d, u**2 * x, u**2 * y, 
+        d*x*y, d*x*u, d*y*u, x*y*u,
+        d**4, x**4, y**4, u**4, d*x*y*u, # quartic terms
+        d**3 * x, d**3 * y, d**3 * u, 
+        x**3 * d, x**3 * y, x**3 * u, 
+        y**3 * d, y**3 * x, y**3 * u, 
+        u**3 * d, u**3 * x, u**3 * y, 
+        d**2 * x**2, d**2 * y**2, d**2 * u**2, x**2 * y**2, x**2 * u**2, y**2 * u**2,
+        d**2 * x * y, d**2 * x * u, d**2 * y * u,
+        x**2 * d * y, x**2 * d * u, x**2 * y * u,
+        y**2 * d * x, y**2 * d * u, y**2 * x * u,
+        u**2 * d * x, u**2 * d * y, u**2 * x * y,
     ])
+    # future work: regularize these to drive terms to zero
     return features
 
 def regression_weights(states, U):
@@ -314,6 +317,21 @@ def approx_values(states, w):
         values[s] = np.dot(w, features)
     return values
 
+def extract_policy(U, states, actions, transition, reward, gamma):
+    '''Extract policy from value function U'''
+    policy = {}
+    for s in states:
+        Q = []
+        neighbors = get_neighbors(s)
+        for a in actions:
+            q = 0
+            for s_prime in neighbors:
+                prob = transition(s, a, s_prime)
+                r = reward(s, a, s_prime)
+                q += prob * (r + gamma * U[s_prime])
+            Q.append(q)
+        policy[s] = np.argmax(Q)
+    return policy
 
 ###### Visualization Functions ######
 def grid_to_xy(gx, gy):
@@ -424,8 +442,6 @@ if __name__ == "__main__":
     print("Building...")
     states = build_states()
     build_landmarks_visibility_set()
-    build_time = time.time()
-    print(f"Building state set took {build_time-start_time} s\n")
 
     actions = [0, 1, 2]  # 0: move forward, 1: turn left, 2: turn right
 
@@ -438,23 +454,23 @@ if __name__ == "__main__":
         U = approx_values(states, w)
         policy = extract_policy(U, states, actions, transition, reward, gamma)
         iter_time = time.time()
-        print(f"Approximate value iteration process took {iter_time-build_time} s\n")    
+        print(f"Approximate value iteration process took {iter_time-start_time} s\n")    
     else:
         print("Running Value Iteration...")
         U, policy = value_iteration(states, actions, transition, reward, gamma)
         iter_time = time.time()
-        print(f"Value iteration process took {iter_time-build_time} s\n")    
+        print(f"Value iteration process took {iter_time-start_time} s\n")    
     
     print("Simulating...")
     # Simulate agent following optimal policy
     trajectory = simulate(start_state, policy, sim_steps)
     sim_time = time.time()
     print(f"Simulated agent in {sim_time-iter_time} s\n")
+    print(f"Total time to run: {sim_time-start_time} s")
 
     # Plot results
     print("Plotting...")
     V = collapse_U_to_grid(U, grid_width, grid_height, directions=6)
     plot_hex_grid(V, goal_position, trajectory)
     plot_uncertainty(trajectory)
-    end_time = time.time()
-    print(f"Total time to run: {end_time-start_time} s")
+    
